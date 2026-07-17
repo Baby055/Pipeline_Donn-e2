@@ -1,16 +1,3 @@
--- sql/create_star_schema.sql
---
--- Schéma en étoile pour l'analyse de la qualité de l'air.
--- Compatible PostgreSQL local (sans Docker).
---
--- Créer la base d'abord :
---   sudo -u postgres psql -c "CREATE DATABASE air_quality;"
---   sudo -u postgres psql -c "CREATE USER air_quality_user WITH PASSWORD 'air_quality_pass';"
---   sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE air_quality TO air_quality_user;"
---
--- Puis appliquer ce fichier :
---   sudo -u postgres psql -d air_quality -f sql/create_star_schema.sql
-
 CREATE TABLE IF NOT EXISTS dim_ville (
     ville_id     SERIAL PRIMARY KEY,
     ville        VARCHAR(100) NOT NULL,
@@ -24,7 +11,8 @@ CREATE TABLE IF NOT EXISTS dim_temps (
     temps_id     SERIAL PRIMARY KEY,
     date_valeur  DATE     NOT NULL,
     heure        SMALLINT NOT NULL CHECK (heure BETWEEN 0 AND 23),
-    jour_semaine SMALLINT NOT NULL,   -- 1=lundi ... 7=dimanche
+    jour_semaine SMALLINT NOT NULL,   -- 1=lundi ... 7=dimanche (ISO)
+    est_weekend  BOOLEAN  NOT NULL,   -- true si jour_semaine IN (6, 7)
     mois         SMALLINT NOT NULL,
     annee        SMALLINT NOT NULL,
     UNIQUE (date_valeur, heure)
