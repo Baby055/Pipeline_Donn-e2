@@ -79,12 +79,14 @@ def _upsert_dim_temps(cur, df: pd.DataFrame) -> dict:
     rows = []
     for date_str, heure_str in temps_df.itertuples(index=False, name=None):
         d = datetime.strptime(date_str, "%Y-%m-%d")
-        rows.append((d.date(), int(heure_str), d.isoweekday(), d.month, d.year))
+        jour_semaine = d.isoweekday()
+        est_weekend = jour_semaine in (6, 7)
+        rows.append((d.date(), int(heure_str), jour_semaine, est_weekend, d.month, d.year))
 
     execute_values(
         cur,
         """
-        INSERT INTO dim_temps (date_valeur, heure, jour_semaine, mois, annee)
+        INSERT INTO dim_temps (date_valeur, heure, jour_semaine, est_weekend, mois, annee)
         VALUES %s
         ON CONFLICT (date_valeur, heure) DO NOTHING
         """,
