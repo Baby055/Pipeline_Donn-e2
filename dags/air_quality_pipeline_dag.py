@@ -46,7 +46,7 @@ if SCRIPTS_DIR not in sys.path:
     sys.path.append(SCRIPTS_DIR)
 
 from extract_air_quality import extract_air_quality, CITY_COORDS  # noqa: E402
-from transform_air_quality import transform_files                   # noqa: E402
+from build_clean_dataset import build_clean_dataset                # noqa: E402
 from load_dwh import load_clean_csv_to_dwh                         # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -54,6 +54,7 @@ logger = logging.getLogger(__name__)
 BASE_DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 RAW_DIR  = os.path.join(BASE_DATA_DIR, "raw")
 CLEAN_DIR = os.path.join(BASE_DATA_DIR, "clean")
+CLEAN_FILE_PATH = os.path.join(CLEAN_DIR, "air_quality_clean.csv")
 
 CITIES = list(CITY_COORDS.keys())
 
@@ -96,20 +97,12 @@ def _extract_task(city_name: str, **context):
 
 
 def _transform_task(**context):
-    """Transformation raw -> clean pour l'heure d'exécution du DAG."""
-    execution_date = context["ds"]
-    execution_hour = context["ts"][11:13]
-
-    raw_dir   = os.path.join(RAW_DIR, execution_date, execution_hour)
-    clean_dir = os.path.join(CLEAN_DIR, execution_date)
-
-    clean_path = transform_files(
-        date=execution_date,
-        hour=execution_hour,
-        raw_dir=raw_dir,
-        clean_dir=clean_dir,
+    """Reconstruit le fichier clean unique à partir de TOUT data/raw/ (pas seulement l'heure courante)."""
+    clean_path = build_clean_dataset(
+        raw_dir=RAW_DIR,
+        out_path=CLEAN_FILE_PATH,
     )
-    logger.info("Fichier clean produit : %s", clean_path)
+    logger.info("Fichier clean (unique) reconstruit : %s", clean_path)
     return clean_path
 
 

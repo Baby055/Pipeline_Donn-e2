@@ -30,7 +30,7 @@ if SCRIPTS_DIR not in sys.path:
     sys.path.append(SCRIPTS_DIR)
 
 from extract_air_quality import CITY_COORDS, _slugify  # noqa: E402
-from transform_air_quality import transform_files        # noqa: E402
+from build_clean_dataset import build_clean_dataset       # noqa: E402
 from load_dwh import load_clean_csv_to_dwh              # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 BASE_DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 RAW_DIR   = os.path.join(BASE_DATA_DIR, "raw")
 CLEAN_DIR = os.path.join(BASE_DATA_DIR, "clean")
+CLEAN_FILE_PATH = os.path.join(CLEAN_DIR, "air_quality_clean.csv")
 
 AIR_POLLUTION_HISTORY_URL = "https://api.openweathermap.org/data/2.5/air_pollution/history"
 MONTHS_OF_HISTORY = 12
@@ -134,31 +135,16 @@ def _backfill_city_month(city_name: str, start_ts: int, end_ts: int, label: str,
 
 
 def _transform_and_load_month(label: str, **context):
-    """Rejoue transform + load pour chaque jour/heure du mois backfillé."""
-    year, month = label.split("-")
-    days_in_month = calendar.monthrange(int(year), int(month))[1]
-
-    total_loaded = 0
-    for day in range(1, days_in_month + 1):
-        date_str = f"{year}-{month}-{day:02d}"
-        raw_date_dir = os.path.join(RAW_DIR, date_str)
-        if not os.path.isdir(raw_date_dir):
-            continue
-
-        for hour_str in sorted(os.listdir(raw_date_dir)):
-            raw_hour_dir = os.path.join(raw_date_dir, hour_str)
-            clean_dir = os.path.join(CLEAN_DIR, date_str)
-            try:
-                clean_path = transform_files(
-                    date=date_str, hour=hour_str,
-                    raw_dir=raw_hour_dir, clean_dir=clean_dir,
-                )
-                total_loaded += load_clean_csv_to_dwh(clean_path)
-            except FileNotFoundError:
-                continue
-
-    logger.info("Backfill %s : %s lignes chargées au total.", label, total_loaded)
-    return total_loaded
+    """
+    Après le backfill brut d'un mois pour toutes les villes, reconstruit le
+    fichier clean UNIQUE depuis tout raw/ (pas seulement ce mois) et recharge
+    le DWH. Le rechargement est idempotent (UPSERT), donc rejouer sur tout
+    raw/ à chaque mois ne duplique rien.
+    """
+    clean_path = build_clean_dataset(raw_dir=RAW_DIR, out_path=CLEAN_FILE_PATH)
+    n_loaded = load_clean_csv_to_dwh(clean_path)
+    logger.info("Backfill %s : clean reconstruit, %s lignes chargées au total.", label, n_loaded)
+    return n_loaded
 
 
 with DAG(
