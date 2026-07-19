@@ -1,13 +1,19 @@
 """
 dags/air_quality_backfill_dag.py
 
-DAG de backfill historique : charge 12 mois d'historique de qualité de l'air
-avant que le pipeline horaire (air_quality_pipeline_dag) ne prenne le relai.
+DAG de backfill historique : charge l'historique de qualité de l'air
+(12 mois idéal, 3 mois minimum accepté par le sujet) avant que le pipeline
+horaire (air_quality_pipeline_dag) ne prenne le relai.
 
 Ce DAG n'est PAS planifié automatiquement (schedule=None) :
 il se déclenche manuellement une seule fois depuis l'UI Airflow.
 
 Utilise l'endpoint OpenWeather "Air Pollution History" (plan gratuit inclus).
+Écrit uniquement dans raw/ (un JSON par ville/heure) — la reconstruction de
+clean/, sa validation et le chargement DWH sont ensuite délégués aux mêmes
+scripts que le pipeline horaire (build_clean_dataset.py, validate_clean.py,
+load_dwh.py), pour garantir que backfill et flux courant produisent des
+données identiques en forme.
 """
 
 import os
@@ -21,6 +27,7 @@ import requests
 from airflow import DAG
 from airflow.providers.standard.operators.python import PythonOperator
 from airflow.models import Variable
+from airflow.exceptions import AirflowFailException
 
 DAG_FOLDER = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(DAG_FOLDER)
@@ -29,9 +36,10 @@ SCRIPTS_DIR = os.path.join(PROJECT_ROOT, "scripts")
 if SCRIPTS_DIR not in sys.path:
     sys.path.append(SCRIPTS_DIR)
 
-from extract_air_quality import CITY_COORDS, _slugify  # noqa: E402
-from build_clean_dataset import build_clean_dataset       # noqa: E402
-from load_dwh import load_clean_csv_to_dwh              # noqa: E402
+from extract_air_quality import CITY_COORDS, _slugify       # noqa: E402
+from build_clean_dataset import build_clean_dataset            # noqa: E402
+from validate_clean import validate as validate_clean_file     # noqa: E402
+from load_dwh import load_clean_csv_to_dwh                   # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +49,9 @@ CLEAN_DIR = os.path.join(BASE_DATA_DIR, "clean")
 CLEAN_FILE_PATH = os.path.join(CLEAN_DIR, "air_quality_clean.csv")
 
 AIR_POLLUTION_HISTORY_URL = "https://api.openweathermap.org/data/2.5/air_pollution/history"
+
+# 12 mois idéal (imposé par le sujet comme cible ; 3 mois minimum accepté si
+# le quota API gratuit ou le temps disponible ne permet pas d'aller plus loin).
 MONTHS_OF_HISTORY = 12
 
 default_args = {
@@ -77,7 +88,7 @@ def _month_ranges(n_months: int):
 
 
 def _backfill_city_month(city_name: str, start_ts: int, end_ts: int, label: str, **context):
-    """Récupère l'historique d'un mois pour une ville, écrit un JSON par heure."""
+    """Récupère l'historique d'un mois pour une ville, écrit un JSON par heure dans raw/."""
     api_key = _get_api_key()
     coords = CITY_COORDS[city_name]
 
@@ -134,22 +145,33 @@ def _backfill_city_month(city_name: str, start_ts: int, end_ts: int, label: str,
     return True
 
 
-def _transform_and_load_month(label: str, **context):
-    """
-    Après le backfill brut d'un mois pour toutes les villes, reconstruit le
-    fichier clean UNIQUE depuis tout raw/ (pas seulement ce mois) et recharge
-    le DWH. Le rechargement est idempotent (UPSERT), donc rejouer sur tout
-    raw/ à chaque mois ne duplique rien.
+def _rebuild_validate_load(**context):
+    """Rejoue build_clean_dataset + validate_clean + load_dwh sur TOUT raw/,
+    une seule fois à la fin du backfill (le fichier clean est de toute façon
+    reconstruit en entier à chaque appel, inutile de le faire mois par mois).
+
+    Fait échouer le DAG si le fichier clean reconstruit n'est pas conforme,
+    plutôt que de charger silencieusement des données invalides dans le DWH.
     """
     clean_path = build_clean_dataset(raw_dir=RAW_DIR, out_path=CLEAN_FILE_PATH)
+
+    errors = validate_clean_file(clean_path)
+    if errors:
+        for e in errors:
+            logger.error("Validation clean/ échouée après backfill : %s", e)
+        raise AirflowFailException(
+            f"Fichier clean non conforme après backfill ({len(errors)} erreur(s)) : {errors}"
+        )
+
     n_loaded = load_clean_csv_to_dwh(clean_path)
-    logger.info("Backfill %s : clean reconstruit, %s lignes chargées au total.", label, n_loaded)
+    logger.info("Backfill terminé : clean validé, %s lignes chargées au total.", n_loaded)
     return n_loaded
 
 
 with DAG(
     dag_id="air_quality_backfill_dag",
-    description="Backfill ponctuel de 12 mois d'historique qualité de l'air (déclencher manuellement une seule fois)",
+    description="Backfill ponctuel d'historique qualité de l'air (12 mois idéal, "
+                 "3 mois minimum) — à déclencher manuellement une seule fois",
     default_args=default_args,
     schedule=None,
     start_date=datetime(2026, 1, 1),
@@ -157,9 +179,8 @@ with DAG(
     tags=["qualite-air", "backfill", "historique", "bloc1"],
 ) as dag:
 
-    previous_load = None
+    all_city_month_tasks = []
     for start_ts, end_ts, label in _month_ranges(MONTHS_OF_HISTORY):
-        city_tasks = []
         for city_name in CITY_COORDS:
             t = PythonOperator(
                 task_id=f"backfill_{city_name.lower().replace(' ', '_')}_{label}",
@@ -171,16 +192,11 @@ with DAG(
                     "label": label,
                 },
             )
-            city_tasks.append(t)
+            all_city_month_tasks.append(t)
 
-        load_t = PythonOperator(
-            task_id=f"transform_load_{label}",
-            python_callable=_transform_and_load_month,
-            op_kwargs={"label": label},
-        )
+    rebuild_task = PythonOperator(
+        task_id="rebuild_validate_load",
+        python_callable=_rebuild_validate_load,
+    )
 
-        city_tasks >> load_t
-
-        if previous_load is not None:
-            previous_load >> city_tasks[0]
-        previous_load = load_t
+    all_city_month_tasks >> rebuild_task

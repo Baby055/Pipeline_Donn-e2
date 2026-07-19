@@ -3,23 +3,23 @@ dags/air_quality_pipeline_dag.py
 
 DAG Airflow : pipeline qualité de l'air en production (Bloc 1 - groupe).
 
-Même structure que weather_pipeline_dag.py du repo Pipeline_Donn-e2 :
-  - une tâche d'extraction par ville (appel API OpenWeather Air Pollution)
-  - une tâche de transformation raw -> clean
-  - une tâche de chargement dans le schéma en étoile PostgreSQL
-
 Étapes :
     Extraction (par ville, toutes les heures)
-        -> data/raw/{date}/{heure}/   (JSON brut, un fichier par ville)
-        -> Transformation             (nettoyage, aplatissement)
-        -> data/clean/{date}/         (CSV consolidé par heure)
-        -> Chargement DWH             (schéma en étoile : dim_ville, dim_temps, fact_qualite_air)
+        -> data/raw/{date}/{heure}/   (JSON brut, un fichier par ville, jamais modifié)
+        -> build_clean_dataset        (relit TOUT raw/, reconstruit intégralement
+                                        data/clean/air_quality_clean.csv)
+        -> validate_clean             (le run échoue si le fichier clean ne respecte
+                                        pas le contrat de données : colonnes, doublons,
+                                        tri, plages de valeurs, nombre de villes —
+                                        aucun fichier invalide n'est chargé dans le DWH)
+        -> load_dwh                   (schéma en étoile : dim_ville, dim_temps, fact_qualite_air)
 
 Configuration :
     - Variable Airflow "OPENWEATHER_API_KEY" (Admin > Variables)
       repli sur variable d'environnement du même nom.
     - Variables d'environnement PG_HOST / PG_PORT / PG_DB / PG_USER / PG_PASSWORD
-      pour la connexion PostgreSQL (pas de Docker, connexion directe).
+      pour la connexion PostgreSQL (PG_PASSWORD obligatoire, aucun défaut —
+      voir scripts/load_dwh.py).
 
 Installation (sans Docker) :
     1. Copier dags/ et scripts/ dans ~/airflow/ (même niveau)
@@ -37,6 +37,7 @@ from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.providers.standard.operators.python import PythonOperator
 from airflow.models import Variable
+from airflow.exceptions import AirflowFailException
 
 DAG_FOLDER = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(DAG_FOLDER)
@@ -47,12 +48,13 @@ if SCRIPTS_DIR not in sys.path:
 
 from extract_air_quality import extract_air_quality, CITY_COORDS  # noqa: E402
 from build_clean_dataset import build_clean_dataset                # noqa: E402
+from validate_clean import validate as validate_clean_file         # noqa: E402
 from load_dwh import load_clean_csv_to_dwh                         # noqa: E402
 
 logger = logging.getLogger(__name__)
 
 BASE_DATA_DIR = os.path.join(PROJECT_ROOT, "data")
-RAW_DIR  = os.path.join(BASE_DATA_DIR, "raw")
+RAW_DIR = os.path.join(BASE_DATA_DIR, "raw")
 CLEAN_DIR = os.path.join(BASE_DATA_DIR, "clean")
 CLEAN_FILE_PATH = os.path.join(CLEAN_DIR, "air_quality_clean.csv")
 
@@ -96,20 +98,40 @@ def _extract_task(city_name: str, **context):
     return success
 
 
-def _transform_task(**context):
-    """Reconstruit le fichier clean unique à partir de TOUT data/raw/ (pas seulement l'heure courante)."""
-    clean_path = build_clean_dataset(
-        raw_dir=RAW_DIR,
-        out_path=CLEAN_FILE_PATH,
-    )
+def _build_clean_task(**context):
+    """Reconstruit le fichier clean unique à partir de TOUT data/raw/."""
+    clean_path = build_clean_dataset(raw_dir=RAW_DIR, out_path=CLEAN_FILE_PATH)
     logger.info("Fichier clean (unique) reconstruit : %s", clean_path)
     return clean_path
 
 
-def _load_task(**context):
-    """Chargement du fichier clean dans le schéma en étoile PostgreSQL."""
+def _validate_clean_task(**context):
+    """Valide le fichier clean produit ; fait échouer le DAG si non conforme.
+
+    On ne veut jamais charger un fichier invalide dans le DWH : mieux vaut un
+    run en échec (visible dans l'historique) qu'un warehouse silencieusement
+    corrompu.
+    """
     ti = context["ti"]
-    clean_path = ti.xcom_pull(task_ids="transform_air_quality")
+    clean_path = ti.xcom_pull(task_ids="build_clean_dataset")
+
+    errors = validate_clean_file(clean_path)
+    if errors:
+        for e in errors:
+            logger.error("Validation clean/ échouée : %s", e)
+        raise AirflowFailException(
+            f"Fichier clean non conforme au contrat de données ({len(errors)} erreur(s)), "
+            f"chargement DWH annulé : {errors}"
+        )
+
+    logger.info("Fichier clean validé avec succès : %s", clean_path)
+    return clean_path
+
+
+def _load_task(**context):
+    """Chargement du fichier clean validé dans le schéma en étoile PostgreSQL."""
+    ti = context["ti"]
+    clean_path = ti.xcom_pull(task_ids="validate_clean")
     n_rows = load_clean_csv_to_dwh(clean_path)
     logger.info("Chargement DWH terminé : %s lignes.", n_rows)
     return n_rows
@@ -117,7 +139,8 @@ def _load_task(**context):
 
 with DAG(
     dag_id="air_quality_pipeline_dag",
-    description="Extraction horaire de la qualité de l'air multi-villes → clean → DWH étoile",
+    description="Extraction horaire de la qualité de l'air multi-villes -> "
+                 "reconstruction clean/ unique -> validation -> DWH étoile",
     default_args=default_args,
     schedule="@hourly",
     start_date=datetime(2026, 1, 1),
@@ -135,9 +158,14 @@ with DAG(
         )
         extract_tasks.append(task)
 
-    transform_task = PythonOperator(
-        task_id="transform_air_quality",
-        python_callable=_transform_task,
+    build_clean_task = PythonOperator(
+        task_id="build_clean_dataset",
+        python_callable=_build_clean_task,
+    )
+
+    validate_task = PythonOperator(
+        task_id="validate_clean",
+        python_callable=_validate_clean_task,
     )
 
     load_task = PythonOperator(
@@ -145,5 +173,6 @@ with DAG(
         python_callable=_load_task,
     )
 
-    # Toutes les extractions (gérées en interne) avant transformation, puis chargement
-    extract_tasks >> transform_task >> load_task
+    # Toutes les extractions (gérées en interne, jamais bloquantes) avant de
+    # reconstruire clean/, puis validation obligatoire avant le chargement DWH.
+    extract_tasks >> build_clean_task >> validate_task >> load_task
