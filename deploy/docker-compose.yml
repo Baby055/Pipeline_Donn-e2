@@ -1,0 +1,99 @@
+version: "3.8"
+
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: air-quality-airflow:latest
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@postgres/${AIRFLOW_DB_NAME}
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+    AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth"
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+    # Consommé par extract_air_quality.py (via Variable.get, avec repli sur l'env)
+    OPENWEATHER_API_KEY: ${OPENWEATHER_API_KEY}
+    # Consommé par load_dwh.py pour se connecter au warehouse air_quality
+    PG_HOST: postgres
+    PG_PORT: 5432
+    PG_DB: ${DWH_DB_NAME}
+    PG_USER: ${DWH_DB_USER}
+    PG_PASSWORD: ${DWH_DB_PASSWORD}
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./scripts:/opt/airflow/scripts
+    - ./data:/opt/airflow/data
+    - ./sql:/opt/airflow/sql
+    - airflow-logs:/opt/airflow/logs
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: air_quality_postgres
+    environment:
+      POSTGRES_USER: ${AIRFLOW_DB_USER}
+      POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD}
+      POSTGRES_DB: ${AIRFLOW_DB_NAME}
+      # Consommées par init-db/01-init.sh (exécuté une seule fois, au premier démarrage)
+      DWH_DB_NAME: ${DWH_DB_NAME}
+      DWH_DB_USER: ${DWH_DB_USER}
+      DWH_DB_PASSWORD: ${DWH_DB_PASSWORD}
+      READONLY_DB_USER: ${READONLY_DB_USER}
+      READONLY_DB_PASSWORD: ${READONLY_DB_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-db:/docker-entrypoint-initdb.d
+      - ./sql:/schema:ro
+    ports:
+      # Exposé pour permettre à IA1 d'interroger le warehouse depuis l'extérieur.
+      # Restreindre l'accès dans le pare-feu du cloud (voir DEPLOY.md).
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${AIRFLOW_DB_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: air_quality_airflow_init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username "${AIRFLOW_ADMIN_USER}" \
+          --password "${AIRFLOW_ADMIN_PASSWORD}" \
+          --firstname Admin --lastname User \
+          --role Admin --email admin@example.com || true
+        airflow variables set OPENWEATHER_API_KEY "${OPENWEATHER_API_KEY}"
+    restart: "no"
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: air_quality_airflow_webserver
+    command: webserver
+    ports:
+      - "8080:8080"
+    depends_on:
+      - airflow-init
+    restart: unless-stopped
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: air_quality_airflow_scheduler
+    command: scheduler
+    depends_on:
+      - airflow-init
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  airflow-logs:
