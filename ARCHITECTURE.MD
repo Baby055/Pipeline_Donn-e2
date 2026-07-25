@@ -27,6 +27,15 @@ Justification du schéma en étoile : Ce schéma est privilégié pour sa simpli
 
 Stockage et Gestion des Données
 
+## Scripts du Pipeline
+
+| Script | Rôle |
+|--------|------|
+| `extract_air_quality.py` | Collecte horaire pour une ville, sauvegarde brute dans `raw/` |
+| `build_clean_dataset.py` | Reconstruit `clean/air_quality_clean.csv` depuis l'intégralité de `raw/` |
+| `validate_clean.py` | Valide le fichier clean (colonnes, doublons, valeurs, tri, nombre de villes) |
+| `load_dwh.py` | Charge le fichier clean validé dans le schéma en étoile PostgreSQL |
+
 Organisation des fichiers :
 
 data/
