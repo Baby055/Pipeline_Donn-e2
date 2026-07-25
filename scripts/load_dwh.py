@@ -1,9 +1,9 @@
 """
 scripts/load_dwh.py
 
-Chargement du CSV clean dans le schéma en étoile PostgreSQL local
-(sans Docker — connexion directe via variables d'environnement ou
-Connection Airflow "air_quality_dwh").
+Chargement du CSV clean unique (data/clean/air_quality_clean.csv, produit par
+build_clean_dataset.py, validé par validate_clean.py) dans le schéma en
+étoile PostgreSQL.
 
 Schéma : dim_ville, dim_temps, fact_qualite_air
 (voir sql/create_star_schema.sql)
@@ -25,12 +25,17 @@ def _get_connection():
     Ouvre une connexion Postgres.
     Essaie d'abord une Connection Airflow "air_quality_dwh",
     puis retombe sur les variables d'environnement locales.
-    Configuration sans Docker :
+
+    Configuration attendue (sans Docker) :
         PG_HOST     = localhost
         PG_PORT     = 5432
         PG_DB       = air_quality
         PG_USER     = air_quality_user
-        PG_PASSWORD = air_quality_pass
+        PG_PASSWORD = <secret, jamais commité, jamais de défaut en dur>
+
+    Si PG_PASSWORD n'est pas fourni (ni via Connection Airflow, ni via
+    variable d'environnement), la connexion échoue explicitement plutôt
+    que de retomber sur un mot de passe écrit en dur dans le code.
     """
     try:
         from airflow.hooks.base import BaseHook
@@ -44,12 +49,21 @@ def _get_connection():
         )
     except Exception:
         logger.info("Pas de Connection Airflow, repli sur les variables d'environnement.")
+
+        password = os.environ.get("PG_PASSWORD")
+        if not password:
+            raise RuntimeError(
+                "PG_PASSWORD manquant : définissez la variable d'environnement "
+                "ou une Connection Airflow 'air_quality_dwh'. Aucun mot de passe "
+                "par défaut n'est utilisé pour ce projet."
+            )
+
         return psycopg2.connect(
             host=os.environ.get("PG_HOST", "localhost"),
             port=os.environ.get("PG_PORT", "5432"),
             dbname=os.environ.get("PG_DB", "air_quality"),
             user=os.environ.get("PG_USER", "air_quality_user"),
-            password=os.environ.get("PG_PASSWORD", "air_quality_pass"),
+            password=password,
         )
 
 
@@ -73,7 +87,11 @@ def _upsert_dim_ville(cur, df: pd.DataFrame) -> dict:
 
 
 def _upsert_dim_temps(cur, df: pd.DataFrame) -> dict:
-    """Insère les couples (date, heure) inconnus, retourne mapping -> temps_id."""
+    """Insère les couples (date, heure) inconnus, retourne mapping -> temps_id.
+
+    est_weekend : True si le jour ISO est samedi (6) ou dimanche (7), en
+    cohérence avec jour_semaine (1=lundi ... 7=dimanche).
+    """
     temps_df = df[["date_extraction", "heure_extraction"]].drop_duplicates()
 
     rows = []
@@ -99,10 +117,10 @@ def _upsert_dim_temps(cur, df: pd.DataFrame) -> dict:
 
 def load_clean_csv_to_dwh(clean_csv_path: str) -> int:
     """
-    Charge un fichier CSV clean dans le schéma en étoile.
+    Charge le fichier CSV clean unique dans le schéma en étoile.
 
     Args:
-        clean_csv_path: chemin vers air_quality_clean_{date}_{heure}.csv
+        clean_csv_path: chemin vers data/clean/air_quality_clean.csv
 
     Returns:
         Nombre de lignes de faits insérées/mises à jour.
@@ -161,5 +179,5 @@ def load_clean_csv_to_dwh(clean_csv_path: str) -> int:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    n = load_clean_csv_to_dwh("./data/clean/2026-07-10/air_quality_clean_2026-07-10_14.csv")
+    n = load_clean_csv_to_dwh("./data/clean/air_quality_clean.csv")
     print("Lignes chargées :", n)

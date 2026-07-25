@@ -55,19 +55,19 @@ def _call_openweather_air_pollution(lat: float, lon: float, api_key: str) -> dic
     """
     params = {"lat": lat, "lon": lon, "appid": api_key}
 
-    last_exception = None
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             response = requests.get(AIR_POLLUTION_URL, params=params, timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
             return response.json()
         except requests.RequestException as exc:
-            last_exception = exc
             logger.warning(
                 "Tentative %s/%s échouée pour lat=%s lon=%s : %s", attempt, MAX_RETRIES, lat, lon, exc
             )
+            if attempt == MAX_RETRIES:
+                raise
 
-    raise last_exception
+    raise RuntimeError(f"Impossible de récupérer les données, MAX_RETRIES={MAX_RETRIES} est invalide.")
 
 
 def extract_air_quality(city_name: str, output_dir: str, api_key: str = None,
