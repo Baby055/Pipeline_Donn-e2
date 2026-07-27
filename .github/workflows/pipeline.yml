@@ -1,0 +1,52 @@
+name: Pipeline horaire qualité de l'air
+
+on:
+  schedule:
+    # À la 5e minute de chaque heure, en UTC. GitHub Actions peut retarder
+    # légèrement les crons en cas de forte charge sur la plateforme — c'est
+    # documenté et acceptable pour ce projet (pas besoin d'une précision à
+    # la seconde près).
+    - cron: "5 * * * *"
+  workflow_dispatch: {}   # permet aussi de déclencher un run manuellement
+
+permissions:
+  contents: write   # nécessaire pour commit/push data/raw et data/clean
+
+concurrency:
+  group: air-quality-hourly-pipeline
+  cancel-in-progress: false   # ne jamais annuler un run en cours, juste mettre en file
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout du repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Installer les dépendances
+        run: pip install -r scripts/requirements-ci.txt
+
+      - name: Extraction + clean + validation + chargement DWH
+        env:
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+          PG_HOST: ${{ secrets.PG_HOST }}
+          PG_PORT: ${{ secrets.PG_PORT }}
+          PG_DB: ${{ secrets.PG_DB }}
+          PG_USER: ${{ secrets.PG_USER }}
+          PG_PASSWORD: ${{ secrets.PG_PASSWORD }}
+        run: python scripts/run_hourly_extract.py
+
+      - name: Commit et push des données (raw/ + clean/)
+        run: |
+          git config user.name "air-quality-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/raw data/clean
+          git diff --cached --quiet || git commit -m "chore(data): run horaire $(date -u +'%Y-%m-%d %Hh')"
+          git push
