@@ -2,7 +2,6 @@
 
 Ce guide déploie Airflow (LocalExecutor) + PostgreSQL en continu sur une VM
 "Always Free" d'Oracle Cloud Infrastructure (OCI), avec Docker Compose.
-Adaptable tel quel à AWS/GCP free tier (seule l'étape 1 change).
 
 ## 0. Où placer ces fichiers dans le repo
 
@@ -30,35 +29,40 @@ reste bien versionné ou fourni autrement, seul `.env` doit être exclu).
 
 ## 1. Créer la VM Oracle Cloud Free Tier
 
-1. Créer un compte OCI (carte bancaire demandée mais jamais débitée sur le tier gratuit).
+1. Créer un compte OCI (carte bancaire demandée pour vérification, jamais
+   débitée sur le tier gratuit).
 2. **Compute > Instances > Create Instance**
    - Image : Ubuntu 22.04 (Canonical Ubuntu)
-   - Forme (Shape) : `VM.Standard.A1.Flex` (Ampere ARM, jusqu'à 4 OCPU / 24 Go RAM gratuits) ou `VM.Standard.E2.1.Micro` (x86, plus limité mais suffisant ici)
-   - Clé SSH : générer une paire ou fournir votre clé publique
-3. **Réseau (VCN) > Security Lists** : ajouter des règles d'entrée (Ingress Rules) :
+   - Forme (Shape) : `VM.Standard.A1.Flex` (Ampere ARM, jusqu'à 4 OCPU / 24 Go RAM gratuits — largement suffisant) ou `VM.Standard.E2.1.Micro` (x86, plus limité mais suffisant ici)
+   - Clé SSH : générer une paire ou fournir votre clé publique — télécharger la clé privée, elle ne sera plus jamais accessible ensuite
+   - Stockage : le volume boot par défaut (~50 Go) est largement suffisant, inclus dans le Free Tier
+3. **Réseau (VCN) > Security Lists** (dans les détails du sous-réseau de la VM) : ajouter des règles d'entrée (Ingress Rules) :
    - TCP port `22` (SSH) — source : votre IP si possible, sinon `0.0.0.0/0`
    - TCP port `8080` (UI Airflow) — source : votre IP ou celle de l'équipe/du correcteur
    - TCP port `5432` (PostgreSQL) — **restreindre à l'IP d'IA1/du correcteur**, ne pas ouvrir à `0.0.0.0/0` si évitable
-4. Noter l'IP publique de la VM.
+4. Noter l'IP publique de la VM (assignée automatiquement, fixe tant que
+   l'instance n'est pas terminée — pas besoin d'IP élastique séparée comme
+   sur AWS).
 
 ## 2. Installer Docker sur la VM
 
 ```bash
-ssh ubuntu@<IP_PUBLIQUE>
+ssh -i votre-cle-privee ubuntu@<IP_PUBLIQUE>
 
-# Ubuntu pare-feu interne (iptables) : autoriser les mêmes ports que la Security List
+# Ubuntu embarque son propre pare-feu interne (iptables) en plus de la
+# Security List OCI — il faut autoriser les mêmes ports des deux côtés :
 sudo iptables -I INPUT -p tcp --dport 8080 -j ACCEPT
 sudo iptables -I INPUT -p tcp --dport 5432 -j ACCEPT
-sudo netfilter-persistent save 2>/dev/null || true
+sudo netfilter-persistent save 2>/dev/null || sudo apt-get install -y iptables-persistent
 
 # Docker + plugin compose
 curl -fsSL https://get.docker.com | sudo sh
 sudo usermod -aG docker $USER
 newgrp docker
 
-sudo systemctl enable docker      # Docker démarre automatiquement après reboot
+sudo systemctl enable docker      
 sudo systemctl start docker
-docker compose version            # doit afficher une version (plugin v2)
+docker compose version            
 ```
 
 ## 3. Cloner le repo et configurer les secrets
@@ -67,7 +71,7 @@ docker compose version            # doit afficher une version (plugin v2)
 git clone <url_de_votre_repo>.git
 cd Pipeline_Donn-e2
 
-cp deploy/.env.example .env   # adapter le chemin si deploy/ a été fusionné à la racine
+cp deploy/.env.example .env
 nano .env
 ```
 
@@ -80,8 +84,8 @@ Renseigner dans `.env` :
 
 ```bash
 docker compose up -d --build
-docker compose ps        # tous les services doivent être "Up" / "healthy"
-docker compose logs -f airflow-init   # vérifier que la migration + la Variable API key sont OK
+docker compose ps        
+docker compose logs -f airflow-init   
 ```
 
 Ouvrir `http://<IP_PUBLIQUE>:8080` dans un navigateur, se connecter avec
@@ -120,7 +124,7 @@ Pour vérifier que ça survit vraiment à un reboot :
 ```bash
 sudo reboot
 # attendre ~1 min, puis :
-ssh ubuntu@<IP_PUBLIQUE> "cd Pipeline_Donn-e2 && docker compose ps"
+ssh -i votre-cle-privee ubuntu@<IP_PUBLIQUE> "cd Pipeline_Donn-e2 && docker compose ps"
 ```
 
 ## 8. Preuve d'exécution automatique (livrable demandé)
@@ -142,6 +146,22 @@ Utilisateur (lecture seule) : air_quality_readonly
 Le mot de passe de `air_quality_readonly` doit être transmis à IA1/au
 correcteur par un canal séparé (formulaire de rendu, message privé) —
 jamais commité, jamais dans le README.
+
+## 10. Surveiller les coûts (rester dans l'Always Free)
+
+Le tier Oracle "Always Free" n'a pas de limite de durée (contrairement à AWS
+qui bascule en payant après 12 mois), mais reste plafonné en ressources.
+Pour éviter toute facturation surprise si vous dépassez ces plafonds :
+
+1. **Billing > Budgets > Create Budget** : créer un budget à faible montant
+   (ex. 1$) avec alerte par email — vous serez notifiés au moindre
+   dépassement.
+2. **Governance > Cost Management** : vérifier régulièrement que l'instance
+   utilisée reste bien dans la liste des "Always Free eligible resources"
+   (shape `VM.Standard.A1.Flex` dans les limites gratuites, ou
+   `VM.Standard.E2.1.Micro`).
+3. Ne pas créer d'instance supplémentaire au-delà de ce que couvre le tier
+   Always Free (une seule VM suffit pour ce projet).
 
 ## Dépannage rapide
 
