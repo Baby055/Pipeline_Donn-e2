@@ -1,0 +1,55 @@
+name: Pipeline Qualité de l'Air (horaire)
+
+on:
+  schedule:
+    - cron: '0 * * * *'   # toutes les heures, à la minute 0, en UTC
+  workflow_dispatch:        # bouton "Run workflow" pour tester manuellement
+
+permissions:
+  contents: write   # nécessaire pour committer data/raw et data/clean dans le repo
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Installer les dépendances
+        run: pip install -r requirements-actions.txt
+
+      - name: Extraction (toutes les villes)
+        env:
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+        run: python scripts/run_hourly_extraction.py
+
+      - name: Reconstruire clean/
+        run: python scripts/build_clean_dataset.py
+
+      - name: Valider clean/
+        run: python scripts/validate_clean.py --file data/clean/air_quality_clean.csv
+
+      - name: Charger dans le warehouse (Neon)
+        env:
+          PG_HOST: ${{ secrets.PG_HOST }}
+          PG_PORT: ${{ secrets.PG_PORT }}
+          PG_DB: ${{ secrets.PG_DB }}
+          PG_USER: ${{ secrets.PG_USER }}
+          PG_PASSWORD: ${{ secrets.PG_PASSWORD }}
+          PG_SSLMODE: require
+        run: python scripts/load_dwh.py
+
+      - name: Committer raw/ et clean/ dans le repo
+        run: |
+          git config user.name "pipeline-bot"
+          git config user.email "actions@github.com"
+          git add data/raw data/clean
+          git diff --cached --quiet || git commit -m "Auto: run pipeline $(date -u +%Y-%m-%dT%H:%M)Z"
+          git push
