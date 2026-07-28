@@ -1,0 +1,48 @@
+name: Backfill historique Qualité de l'Air
+
+on:
+  workflow_dispatch:
+    inputs:
+      months:
+        description: "Nombre de mois d'historique à récupérer"
+        required: false
+        default: '12'
+
+permissions:
+  contents: write
+
+jobs:
+  run-backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Installer les dépendances
+        run: pip install -r requirements-actions.txt
+
+      - name: Backfill (extraction + clean + validate + load)
+        env:
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+          PG_HOST: ${{ secrets.PG_HOST }}
+          PG_PORT: ${{ secrets.PG_PORT }}
+          PG_DB: ${{ secrets.PG_DB }}
+          PG_USER: ${{ secrets.PG_USER }}
+          PG_PASSWORD: ${{ secrets.PG_PASSWORD }}
+          PG_SSLMODE: require
+        run: python scripts/run_backfill.py --months ${{ github.event.inputs.months }}
+
+      - name: Committer raw/ et clean/ dans le repo
+        run: |
+          git config user.name "pipeline-bot"
+          git config user.email "actions@github.com"
+          git add data/raw data/clean
+          git diff --cached --quiet || git commit -m "Auto: backfill ${{ github.event.inputs.months }} mois"
+          git push
