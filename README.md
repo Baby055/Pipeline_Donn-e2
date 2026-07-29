@@ -28,20 +28,24 @@ un entrepôt de données en étoile (Bloc 1, projet de groupe).
 Pipeline_Donn-e2/
 ├── ARCHITECTURE.md
 ├── README.md                          # ce fichier
-├── dags/
-│   ├── air_quality_pipeline_dag.py    # DAG horaire : extraction -> clean -> validation -> DWH
-│   └── air_quality_backfill_dag.py    # DAG manuel : backfill historique
+├── .github/
+│   └── workflows/
+│       ├── pipeline_hourly.yml        # workflow horaire : extraction -> clean -> validation -> DWH
+│       └── backfill.yml               # workflow manuel : backfill historique
 ├── scripts/
-│   ├── extract_air_quality.py         # extraction API -> raw/ (JSON, jamais modifié)
+│   ├── extract_air_quality.py         # fonction d'extraction API -> raw/ (JSON, jamais modifié)
+│   ├── run_hourly_extraction.py       # runner horaire, appelé par pipeline_hourly.yml
+│   ├── run_backfill.py                # runner de backfill, appelé par backfill.yml
 │   ├── build_clean_dataset.py         # reconstruit clean/air_quality_clean.csv depuis raw/
 │   ├── validate_clean.py              # valide le contrat de données sur clean/
-│   └── load_dwh.py                    # charge clean/ dans le schéma en étoile
+│   └── load_dwh.py                    # charge clean/ dans le schéma en étoile (Neon)
 ├── sql/
 │   └── create_star_schema.sql         # DDL : dim_ville, dim_temps, fact_qualite_air
 ├── data/
 │   ├── raw/{date}/{heure}/            # zone intouchable, un JSON par ville et par appel
 │   └── clean/air_quality_clean.csv    # fichier unique, reconstruit à chaque run
-└── requirements.txt
+├── requirements.txt                   # dépendances pour tests locaux
+└── requirements-actions.txt           # dépendances minimales utilisées par les workflows
 ```
 
 ## Zone raw/
@@ -51,7 +55,9 @@ Contient la réponse brute de l'API OpenWeather Air Pollution, enveloppée avec
 les métadonnées d'extraction (`ville`, `pays`, `lat`, `lon`, `date_extraction`,
 `heure_extraction`, `timestamp_utc`, `source`). **Jamais modifié après écriture**
 — c'est la source de vérité à partir de laquelle `clean/` est intégralement
-reconstruit à chaque run.
+reconstruit à chaque run. Comme les runners GitHub Actions s'exécutent sur des
+machines éphémères, `raw/` est commité dans le dépôt Git à la fin de chaque run
+pour rester disponible au run suivant.
 
 ## Zone clean/ — contrat de données
 
@@ -81,11 +87,12 @@ exécution de `build_clean_dataset.py` — jamais d'append.
 
 Validation : `python scripts/validate_clean.py --file data/clean/air_quality_clean.csv`
 vérifie colonnes, doublons, tri chronologique, plages de valeurs et nombre
-minimum de villes avant toute livraison.
+minimum de villes avant toute livraison. Cette étape est intégrée et bloquante
+dans les deux workflows GitHub Actions.
 
 ## Data Warehouse
 
-PostgreSQL, modélisation en étoile (voir `ARCHITECTURE.md` pour la
+PostgreSQL managé (Neon), modélisation en étoile (voir `ARCHITECTURE.md` pour la
 justification étoile vs flocon).
 
 **`dim_ville`** — `ville_id` (PK), `ville`, `pays`, `lat`, `lon`
@@ -97,55 +104,76 @@ faits (conforme aux règles de modélisation du cours).
 
 Chargement : `python scripts/load_dwh.py` (rejouable — upsert sur les clés
 naturelles, ne duplique jamais une ligne pour un même (ville, date, heure)).
+Exécuté automatiquement à la fin de chaque run des workflows GitHub Actions.
 
 **Cohérence attendue** : nombre de lignes de `fact_qualite_air` ≈ nombre de
 villes (6) × nombre d'heures couvertes par la période de collecte. Les écarts
 proviennent des extractions horaires échouées (panne API ponctuelle, quota
 dépassé) — chaque échec est loggé par `extract_air_quality.py` et n'interrompt
-jamais le DAG pour les autres villes.
+jamais le run pour les autres villes.
 
 ## Période couverte et trous connus
 
-> À compléter par le groupe une fois le pipeline déployé et le backfill lancé :
+> À compléter par le groupe une fois le backfill lancé et le pipeline horaire
+> stabilisé sur plusieurs jours :
 > - Période du backfill historique effectivement obtenue (12 mois idéal / 3 mois minimum)
 > - Date de démarrage de la collecte horaire en continu
-> - Heures ou jours avec des données manquantes identifiées (ex : panne serveur, quota API dépassé) et pourquoi
+> - Heures ou jours avec des données manquantes identifiées (ex : panne API, quota dépassé) et pourquoi
 
 ## Connexion au Data Warehouse
 
-> À compléter par le groupe avec les identifiants de connexion réels du
-> serveur de déploiement (host, port, nom de base, utilisateur en lecture
-> seule pour IA1) — ne jamais commiter le mot de passe, le donner par un
-> canal séparé (ex : formulaire de rendu, message privé au correcteur).
+> À compléter par le groupe avec les identifiants de connexion réels de
+> l'instance Neon (host exact, utilisateur en lecture seule pour IA1) — ne
+> jamais commiter le mot de passe, le donner par un canal séparé (ex :
+> formulaire de rendu, message privé au correcteur).
 
 ```
-Host     : <à compléter>
-Port     : <à compléter, 5432 par défaut>
-Database : air_quality
-Utilisateur (lecture seule recommandé pour IA1) : <à compléter>
+Host     : <à compléter, ex: ep-xxxx-pooler.c-10.us-east-1.aws.neon.tech>
+Port     : 5432
+Database : neondb
+SSL mode : require
+Utilisateur (lecture seule recommandé pour IA1) : air_quality_readonly
 ```
 
 ## Installation locale (test avant déploiement)
 
 ```bash
-export AIRFLOW_HOME=~/Pipeline_Donn-e2   # dags/ et scripts/ au même niveau
 pip install -r requirements.txt
 
 export OPENWEATHER_API_KEY="votre_cle"
-export PG_HOST=localhost PG_PORT=5432 PG_DB=air_quality \
-       PG_USER=air_quality_user PG_PASSWORD="votre_mot_de_passe"
+export PG_HOST="ep-xxxx-pooler.c-10.us-east-1.aws.neon.tech"
+export PG_PORT=5432
+export PG_DB="neondb"
+export PG_USER="neondb_owner"
+export PG_PASSWORD="votre_mot_de_passe"
+export PG_SSLMODE="require"
 
-psql -h localhost -U air_quality_user -d air_quality -f sql/create_star_schema.sql
+# Une seule fois : créer le schéma sur Neon
+psql "postgresql://$PG_USER:$PG_PASSWORD@$PG_HOST/$PG_DB?sslmode=require" \
+  -f sql/create_star_schema.sql
 
-airflow standalone
+# Tester l'extraction horaire en local
+python scripts/run_hourly_extraction.py
+python scripts/build_clean_dataset.py
+python scripts/validate_clean.py --file data/clean/air_quality_clean.csv
+python scripts/load_dwh.py
+
+# Tester le backfill en local (ex: 1 mois pour un test rapide)
+python scripts/run_backfill.py --months 1
 ```
 
-Dans l'UI (`localhost:8080`), activer `air_quality_pipeline_dag`, déclencher
-un run manuel, vérifier que `data/clean/air_quality_clean.csv` se met à jour
-et que `SELECT * FROM fact_qualite_air LIMIT 10;` renvoie des lignes.
+## Déploiement en production (GitHub Actions)
 
-Puis déclencher une fois `air_quality_backfill_dag` pour charger l'historique.
+1. Ajouter les secrets du dépôt : Settings > Secrets and variables > Actions
+   — `OPENWEATHER_API_KEY`, `PG_HOST`, `PG_PORT`, `PG_DB`, `PG_USER`, `PG_PASSWORD`
+2. Activer les permissions d'écriture : Settings > Actions > General >
+   Workflow permissions > **Read and write permissions**
+3. Le workflow `.github/workflows/pipeline_hourly.yml` se déclenche
+   automatiquement toutes les heures dès qu'il est présent sur la branche
+   par défaut — rien d'autre à activer
+4. Déclencher une fois `.github/workflows/backfill.yml` manuellement
+   (onglet Actions > Backfill historique Qualité de l'Air > Run workflow)
+   pour charger l'historique
 
-**Rappel** : `airflow standalone` est réservé aux tests locaux (SQLite,
-un seul process). Pour la collecte 24h/24 exigée par le sujet, Airflow doit
-tourner en service persistant sur le serveur de déploiement, pas en standalone.
+**Preuve d'exécution automatique** : onglet **Actions** du dépôt GitHub,
+historique des runs de `pipeline_hourly.yml` sur plusieurs jours.
