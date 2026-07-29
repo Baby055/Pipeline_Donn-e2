@@ -1,0 +1,30 @@
+{
+  "ville": "Cairo",
+  "pays": "EG",
+  "lat": 30.0444,
+  "lon": 31.2357,
+  "date_extraction": "2026-01-26",
+  "heure_extraction": "11",
+  "timestamp_utc": "2026-01-26T11:00:00+00:00",
+  "source": "openweather_air_pollution_history_backfill",
+  "raw_response": {
+    "list": [
+      {
+        "main": {
+          "aqi": 4
+        },
+        "components": {
+          "co": 168.54,
+          "no": 2.22,
+          "no2": 6.46,
+          "o3": 83.73,
+          "so2": 7.17,
+          "pm2_5": 41.98,
+          "pm10": 157.21,
+          "nh3": 2.3
+        },
+        "dt": 1769425200
+      }
+    ]
+  }
+}

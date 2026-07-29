@@ -1,0 +1,30 @@
+{
+  "ville": "New York",
+  "pays": "US",
+  "lat": 40.7128,
+  "lon": -74.006,
+  "date_extraction": "2025-11-20",
+  "heure_extraction": "17",
+  "timestamp_utc": "2025-11-20T17:00:00+00:00",
+  "source": "openweather_air_pollution_history_backfill",
+  "raw_response": {
+    "list": [
+      {
+        "main": {
+          "aqi": 2
+        },
+        "components": {
+          "co": 223.38,
+          "no": 3.75,
+          "no2": 16.82,
+          "o3": 69.39,
+          "so2": 2.78,
+          "pm2_5": 8.1,
+          "pm10": 11.95,
+          "nh3": 0.29
+        },
+        "dt": 1763658000
+      }
+    ]
+  }
+}

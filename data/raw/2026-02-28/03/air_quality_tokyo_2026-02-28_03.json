@@ -1,0 +1,30 @@
+{
+  "ville": "Tokyo",
+  "pays": "JP",
+  "lat": 35.6762,
+  "lon": 139.6503,
+  "date_extraction": "2026-02-28",
+  "heure_extraction": "03",
+  "timestamp_utc": "2026-02-28T03:00:00+00:00",
+  "source": "openweather_air_pollution_history_backfill",
+  "raw_response": {
+    "list": [
+      {
+        "main": {
+          "aqi": 2
+        },
+        "components": {
+          "co": 219.97,
+          "no": 8.1,
+          "no2": 20.89,
+          "o3": 71.75,
+          "so2": 13.22,
+          "pm2_5": 20.06,
+          "pm10": 23.23,
+          "nh3": 0
+        },
+        "dt": 1772247600
+      }
+    ]
+  }
+}

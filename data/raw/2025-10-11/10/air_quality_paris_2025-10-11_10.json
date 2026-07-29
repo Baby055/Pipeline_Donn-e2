@@ -1,0 +1,30 @@
+{
+  "ville": "Paris",
+  "pays": "FR",
+  "lat": 48.8566,
+  "lon": 2.3522,
+  "date_extraction": "2025-10-11",
+  "heure_extraction": "10",
+  "timestamp_utc": "2025-10-11T10:00:00+00:00",
+  "source": "openweather_air_pollution_history_backfill",
+  "raw_response": {
+    "list": [
+      {
+        "main": {
+          "aqi": 1
+        },
+        "components": {
+          "co": 152.58,
+          "no": 1.4,
+          "no2": 4.49,
+          "o3": 42.96,
+          "so2": 1.22,
+          "pm2_5": 9.76,
+          "pm10": 11.87,
+          "nh3": 0.92
+        },
+        "dt": 1760176800
+      }
+    ]
+  }
+}
