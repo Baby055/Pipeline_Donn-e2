@@ -1,0 +1,30 @@
+{
+  "ville": "Paris",
+  "pays": "FR",
+  "lat": 48.8566,
+  "lon": 2.3522,
+  "date_extraction": "2026-09-02",
+  "heure_extraction": "18",
+  "timestamp_utc": "2026-09-02T18:11:41",
+  "source": "openweather_air_pollution",
+  "raw_response": {
+    "list": [
+      {
+        "main": {
+          "aqi": 2
+        },
+        "components": {
+          "co": 120.4,
+          "no": 0.09,
+          "no2": 2.79,
+          "o3": 89.66,
+          "so2": 0.28,
+          "pm2_5": 3.59,
+          "pm10": 5.79,
+          "nh3": 1.83
+        },
+        "dt": 1788372701
+      }
+    ]
+  }
+}
