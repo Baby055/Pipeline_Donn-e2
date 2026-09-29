@@ -1,0 +1,30 @@
+{
+  "ville": "Sydney",
+  "pays": "AU",
+  "lat": -33.8688,
+  "lon": 151.2093,
+  "date_extraction": "2026-09-29",
+  "heure_extraction": "13",
+  "timestamp_utc": "2026-09-29T13:29:04",
+  "source": "openweather_air_pollution",
+  "raw_response": {
+    "list": [
+      {
+        "main": {
+          "aqi": 1
+        },
+        "components": {
+          "co": 94.36,
+          "no": 0,
+          "no2": 7.11,
+          "o3": 39.41,
+          "so2": 3.01,
+          "pm2_5": 5.18,
+          "pm10": 9.07,
+          "nh3": 1.07
+        },
+        "dt": 1790688438
+      }
+    ]
+  }
+}
